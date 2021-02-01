@@ -1,0 +1,1751 @@
+/* Copyright(c) 2021 ZiChen Zhang,JiaCheng Pan and all contributors
+All right Reserved
+    
+    Distributed under MIT license
+    See copy at https://opensource.org/licenses/MIT
+*/
+#include <iostream>
+#include <time.h>
+#include <cstdlib>
+#include <bits/stdc++.h>
+#include <stdlib.h>
+#include <math.h>
+#include <unistd.h>
+#define DefaultUpdate map_entity[playery][playerx]='!'
+#ifndef __linux
+	#define clear system("cls");
+#endif
+#ifdef __linux
+	#define clear system("clear");
+#endif //一键适配,来自潘嘉诚
+using namespace std;
+const int WorldXSize = 256;//世界的横向最大距离
+const int WorldYSize = 256;//世界的纵向最大距离
+//系统函数若不符合任何条件时，会原地更新一次，保证任何操作都能更新玩家数据
+const string GameLatestVersion = "Survive 1.3.2 21w1a";//游戏名称及最新版本
+int respawnx,respawny,playerx = WorldXSize / 2,playery = WorldYSize / 2,lang,sea_level  = WorldYSize/ 2,vision_size = 16,boarder_x = WorldXSize,boarder_y = WorldYSize,game_time;//从左到右依次为重生x坐标及y坐标，玩家的实时x与y坐标，方块数量boarder_x = WorldXSize,boarder_y = WorldYSize;
+int world_sx = 0,world_ex = WorldXSize - 1,world_sy = 0,world_ey = WorldYSize - 1,maxinum_fill = 16384;
+int chunk_now = playerx / 16;
+int block_ID[]      = {0,1,2,3,4,5,6,7,8,9,10,11,12};
+int block_hardness[] = {10,10,5,5,-2147483647,-1,-1,-1,-2147483647,7,10,10,5,2};
+int block_explosion_resistance[] = {30,30,3,3,2147483647,0,500,500,2147483647,10,17,12,1,0};
+int biome_steep[] = {5,50,80,20,20,10,5,25,100};
+int biome_tree_density[] = {10,0,0,0,0,0,0,50,75};//树木密度
+int biome_tree_maxsize[] = {3,0,0,0,0,0,0,4,32};//最大树木高度
+int biome_surface_block[] = {2,12,0,0,6,7,1,2,2,1};//生物群系的地表方块
+int mod_total,mod_block_total,mod_item_total,mod_command_total;
+double player_heart,player_hunger,player_full;
+int player_oxygen;
+char default_block_char = '?';
+char block_char[]   = {'O','@','+','%','/',' ','~','-','&','|','F','C','$','^'};//从左到右：石头，圆石，泥土（也可以是草方块），屏障，空气，水，岩浆，基岩，树木，熔炉，工作台，沙子，树叶
+char item_char[] = {' ','@','+','%','/','|','|','X','=','=','=','#','$'};//物品的符号(几乎用光了所有字符)
+char mod_block_char[128],mod_item_char[128];//用于存放模组定义的新方块及物品
+struct Block{
+    short ID;//编号
+    int hardness;//硬度
+    int explosion_resistance;//爆炸抗性
+    char show_char;//显示字符
+    string name;//名称
+    short type;//类型
+    string tag;//标签
+}Block_List[16],ActiveChunk[256][48];
+short map_terrain[WorldYSize][WorldXSize];//地形层,存储ID
+char map_entity[WorldYSize][WorldXSize];//实体层
+string language,gamemode = "survival",active_screen,warningtext,worldname,playername;
+string tag_type[] = {"unbreakable","interaction","plant","ore_replaceable","through","gravity","oxygen","fluid"};//标签类型
+string block_name[] = {"stone","cobblestone","grass","dirt","barrier","air","water","lava","bedrock","wood","furnace","crafting_table","sand","leave","unknown block"};
+string block_color[] = {"\033[4;47;37;2m","\033[4;47;37;2m","\033[42m","\033[2;42m","\033[2;45m","","\033[4;44m","\033[41m","","\033[4;43m","","\033[2;43m","\033[43m","\033[4;42m",""};
+string item_name[] = {"none","cobblestone","grass","dirt","barrier","wood","stick","wood_plank","iron_ingot","gold_ingot","diamond","emerald","coal"};
+string UI_place[] = {"backpack","simplecraft","crafting table","furnace","chest"};
+string gamemode_name[] = {"survival","creative"};
+string achievement_name[] = {"Move!","First block set!","First block break!","Too hard!","Welcome to the void","I'm stuck!","Changeable World"};//成就名称
+string biome_name[] = {"plain","desert","mountain","extreme mountain","ocean","lava sea","stone plain","forest","jungle","vocano"};
+string mod_list[99],mod_command_list[99],mod_block_name[99],mod_item_name[99];//99个模组及新命令,方块，物品......够用了吧
+string gamerule_list[] = {"color","vision_size","boarder_size","standardized_command","maxinum_fill","player_name","world_name","auto_jump","respawn_point"};
+string gamerule_parameter[] = {"b","i","ii","b","i","s","s","b","ii"};//格式化的参数类型
+bool skip,achievement_get[5] = {0},chunk_discovered[(WorldXSize - 12) / 16],color_on = 0,standardized_command = 0,auto_jump = 1;//跳过开场判断及用于成就的布尔数组
+const int place_num = 5;
+const int block_num = 15;
+const int achievement_num = 6;
+const int gamemode_num = 2;
+const int biome_num = 10;
+const int chunk_total = WorldXSize / 16;
+const int gamerule_num = 9;
+string chunk_code[chunk_total];
+stack <string> info_text;//信息栈，在运行中持续累加再在信息栏中输出
+char screen[18][18] = {{'#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                       {'#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#'}
+};
+char UI[10][32] =     {{'#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#'},
+                       {'#',' ','#',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|','#','#',' ',' ','|',' ','|',' ','#'},
+                       {'#',' ','#',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|','#','#',' ',' ','+','-','+','-','#'},
+                       {'#',' ','#',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|','#','#',' ',' ','|',' ','|',' ','#'},
+                       {'#',' ','#',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|','#','#',' ',' ','+','-','+','-','#'},
+                       {'#',' ','#',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|','#','#',' ',' ',' ',' ',' ',' ','#'},
+                       {'#',' ','#',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|',' ','|',' ',' ','|','#','#',' ',' ','O','-','O',' ','#'},
+                       {'#',' ','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#',' ',' ','|',' ','|',' ','#'},
+                       {'#',' ','#',' ','#',' ','|',' ','|',' ','|',' ','|',' ','|',' ','|',' ','|',' ','|',' ','|',' ','#',' ',' ','O','-','O',' ','#'},
+                       {'#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#','#'},
+};//背包界面，在这里进行合成，调换物品位置，搜寻物品
+char Crafting_Table_UI[10][10] = {{'#','#','#','#','#','#','#','#','#','#'},
+                                  {'#',' ','|',' ','|',' ','|',' ',' ','#'},
+                                  {'#','-','+','-','+','-','|',' ',' ','#'},
+                                  {'#',' ','|',' ','|',' ','|',' ',' ','#'},
+                                  {'#','-','+','-','+','-','|',' ',' ','#'},
+                                  {'#',' ','|',' ','|',' ','|',' ',' ','#'},
+                                  {'#','-','-','-','-','-','+','-','-','#'},
+                                  {'#',' ',' ',' ',' ',' ','|',' ',' ','#'},
+                                  {'#',' ',' ',' ',' ',' ','|',' ',' ','#'},
+                                  {'#','#','#','#','#','#','#','#','#','#'}};
+char Furnace_UI[10][10] = { {'#','#','#','#','#','#','#','#','#','#'},
+                            {'#',' ','|',' ','|',' ',' ',' ',' ','#'},
+                            {'#',' ','+','-','+',' ',' ',' ',' ','#'},
+                            {'#',' ',' ',' ',' ',' ',' ','+','-','#'},
+                            {'#',' ',' ',' ',' ',' ',' ','|',' ','#'},
+                            {'#',' ','+','-','+',' ',' ','+','-','#'},
+                            {'#',' ','|',' ','|',' ',' ',' ',' ','#'},
+                            {'#',' ','+','-','+',' ',' ',' ',' ','#'},
+                            {'#',' ',' ',' ',' ',' ',' ',' ',' ','#'},
+                            {'#','#','#','#','#','#','#','#','#','#'}};
+short chunk[16][16] = {5};
+int crafting_formula[24][3][3] = {   
+                                {
+                                    {0,0,0},
+                                    {0,7,0},
+                                    {0,7,0}
+                                },//合成：木棍
+                                {
+                                    {7,7,7},
+                                    {0,6,0},
+                                    {0,6,0}
+                                },//合成：木镐
+                                {
+                                    {1,1,1},
+                                    {0,6,0},
+                                    {0,6,0}
+                                },//合成：石镐
+                                {
+                                    {8,8,8},
+                                    {0,6,0},
+                                    {0,6,0}
+                                },//合成：铁镐
+                                {
+                                    {9,9,9},
+                                    {0,6,0},
+                                    {0,6,0}
+                                },//合成：金镐
+                                {
+                                    {10,10,10},
+                                    {0,6,0},
+                                    {0,6,0}
+                                },//合成：钻石镐
+                                {
+                                    {11,11,11},
+                                    {0,6,0},
+                                    {0,6,0}
+                                },//合成：绿宝石镐(当前最快最坚硬的镐)
+                                {
+                                    {0,2,0},
+                                    {0,2,0},
+                                    {0,6,0}
+                                },
+                                {
+                                    {0,7,0},
+                                    {0,7,0},
+                                    {0,6,0}
+                                },//合成：木剑
+                                {
+                                    {0,1,0},
+                                    {0,1,0},
+                                    {0,6,0}
+                                },//合成：石剑
+                                {
+                                    {0,8,0},
+                                    {0,8,0},
+                                    {0,6,0}
+                                },//合成：铁剑
+                                {
+                                    {0,9,0},
+                                    {0,9,0},
+                                    {0,6,0}
+                                },//合成：金剑
+                                {
+                                    {0,10,0},
+                                    {0,10,0},
+                                    {0,6,0}
+                                },//合成：钻石剑
+                                {
+                                    {0,11,0},
+                                    {0,11,0},
+                                    {0,6,0}
+                                },//合成：绿宝石剑(伤害最高的剑)
+                                {
+                                    {0,2,0},
+                                    {0,2,0},
+                                    {0,6,0}
+                                },
+                                {
+                                    {0,7,0},
+                                    {0,7,0},
+                                    {0,6,0}
+                                },//合成：木剑
+                                {
+                                    {1,1,0},
+                                    {1,6,0},
+                                    {0,6,0}
+                                },//合成：石斧
+                                {
+                                    {8,8,0},
+                                    {8,6,0},
+                                    {0,6,0}
+                                },//合成：铁斧
+                                {
+                                    {9,9,0},
+                                    {9,6,0},
+                                    {0,6,0}
+                                },//合成：金斧
+                                {
+                                    {10,10,0},
+                                    {10,6,0},
+                                    {0,6,0}
+                                },//合成：钻石斧
+                                {
+                                    {11,11,0},
+                                    {11,6,0},
+                                    {0,6,0}
+                                },//合成：绿宝石斧(速度最快，耐久最高的斧)
+                                {
+                                    {1,1,1},
+                                    {1,0,1},
+                                    {1,1,1}
+                                },//合成：熔炉
+                                {
+                                    {7,7,0},
+                                    {7,7,0},
+                                    {0,0,0}
+                                },//合成：工作台
+                                {
+                                    {7,7,7},
+                                    {7,0,7},
+                                    {7,7,7}
+                                }//合成：箱子
+};//以三维数组存储的合成公式,可随意编辑
+//上面水了150行
+int mod_crafting_formula[128][3][3];
+char TitleScreen[7][31] = {{' ','O','O','O',' ','/',' ',' ','/',' ','%','%','%',' ',' ','@',' ','@',' ','!','!','!',' ','#',' ','#',' ','~','~','~','~'},
+                           {'O',' ',' ',' ',' ','/',' ',' ','/',' ','%',' ',' ','%',' ','@',' ','@',' ',' ','!',' ',' ','#',' ','#',' ','~',' ',' ',' '},
+                           {'O',' ',' ',' ',' ','/',' ',' ','/',' ','%',' ',' ','%',' ','@',' ','@',' ',' ','!',' ',' ','#',' ','#',' ','~',' ',' ',' '},
+                           {' ','O','O','O',' ','/',' ',' ','/',' ','%','%','%',' ',' ','@',' ','@',' ',' ','!',' ',' ','#',' ','#',' ','~','~','~','~'},
+                           {' ',' ',' ',' ',' ','/',' ',' ','/',' ','%','%',' ',' ',' ','@',' ','@',' ',' ','!',' ',' ','#',' ','#',' ','~',' ',' ',' '},
+                           {' ',' ',' ','O',' ','/',' ',' ','/',' ','%',' ','%',' ',' ',' ','@',' ',' ',' ','!',' ',' ',' ','#',' ',' ','~',' ',' ',' '},
+                           {'O','O','O',' ',' ',' ','/','/',' ',' ','%',' ',' ','%',' ',' ','@',' ',' ','!','!','!',' ',' ','#',' ',' ','~','~','~','~'}};
+/*区块示意图
+是指玩家所在的16*256区域，随着玩家的移动，区块也会更新，这就是移动地图的原理
+#    1 2 3 4 5 6 7 8#
+0          |        #
+32         |        #
+64         |        # 
+92  -------!(玩家)--# 
+128 ++++++++++++++++#
+160 OOOOOOOOOOOOOOOO#
+192 OOOOOOOOOOOOOOOO#
+224 OOOOOOOOOOOOOOOO#
+256 &&&&&&&&&&&&&&&&#    
+#  # # # # # # # # #(缩放比1:2)
+*/
+//超级资源包
+string language_achievement[] = {"成就达成! - ","成就達成! -","Achievement got! - ","移动！","移動！","Move!","放置方块！","放置方塊！","First block set!","破坏方块！","破壞方塊！","First block break!","为什么这么硬！","爲什麼這麼硬！","Too hard!","欢迎来到虚空","歡迎來到虛空","Welcome to the void","卡住了！","卡住了！","I'm stuck!","多变的世界","多變的世界","Changeable World"};//成就语言包
+string language_briefinfo[] = {"坐标","坐標","Position","游戏模式","遊戲模式","Gamemode","输入/help以获取帮助","輸入/help以獲取幫助","Print /help for help"};//简略信息语言包
+string language_celebrate[] = {"新年快乐！","新年快樂！","Happy New Year!"};//节日庆祝语言包
+string language_clone[] = {"克隆位置在世界之外，检查(","克隆位置在世界之外，檢查(","Clone Position out of world,Check at (","成功克隆区内方块(","成功克隆區內方塊(","Successfully clone blocks in area (",")由(",")由(",") to area starts from("};//clone指令语言包
+string language_Command[] = {"#命令 -->","#命令 -->","#Command -->"};//命令行语言包
+string language_fill[] = {"成功填充了","成功填充了","Successfully filled ","方块","方塊","blocks","无法填满世界以外的方块(","無法填滿世界以外的方塊(","Impossible to fill blocks outside the world at (","方块总数太多(","方塊總數太多(","Total number of blocks is too much("};//fill指令语言包
+string language_gamerule[] = {"的值被成功改为","的值被成功改爲"," has successfully been changed to ","缺失参数，请检查输入","缺失參數，請檢查輸入","Missing parameter,please check the input"};
+string language_help1[] = {"1.简介","1.簡介","1,Biref Introduction","2.命令","2.命令","2.Command","3.版本信息","3.版本信息","3.Version Information","4.模组","4.模組","4.Mods","选择(1 - 4),输入-1退出","選擇(1-4),輸入-1退出","Choose(1-4),print -1 to exit"};//help主界面
+string language_help2[] = {"选择跳转界面(退出为0) -->","選擇跳轉界面(退出為0) -->","Choose the interface to skip(0 for exit) -->"};//help选择语言包
+string language_help3[] = {"游戏名：Survive\n最新版本：","遊戲名：Survive\n最新版本：","Game Name: Survive\nLatest Version:","这个游戏基于C++编写，是目前社区内最大的C++沙盒游戏，玩家能在游戏里自由的放置破坏方块，并使用各种指令","這個遊戲基於C++編寫，是目前社區內最大的C++沙盒遊戲，玩家能在遊戲裏自由的放置破壞方塊，並使用各種指令","This game is based on C++, is currently the community's largest C++ sandbox game, players can freely place in the game destroy blocks, and use various instructions","游戏完全开源，其他人可自由编写模组，或报告漏洞,bug,撰写新功能甚至同人版本，一切仅限于玩家的想象力","遊戲完全開源，其他人可自由編寫模組，或報告漏洞,bug,撰寫新功能甚至同人版本，一切僅限於玩家的想象力","The game is completely open source, allowing others to write modules, report bugs, write new features or even clone versions, all within the player's imagination"};//简介语言包
+string language_help4[] = {"1.基本命令","1.基本命令","1.Basic command","2.创造命令","2.創造命令","2.Creative command","3.通配符","3.通配符","3.wildcard"};//help-命令语言包
+string language_help5[] = {"基本命令包括/move,/set,/break,wasd,/open,/gamemode, 是玩家必须掌握的基本操作","基本命令包括/move,/set,/break,wasd,/open,/gamemode, 是玩家必須掌握的基本操作","Basic commands include/move/set, / break, wasd, / open/gamemode, players must master the basic operation",
+                               "1.移动","1.移動","1.Moving",
+                               "在命令行里输入w(上),a(左),s(下),d(右)可以让玩家向对应方向前进一格，但如果前进方向上有实体方块则不会执行","在命令行裏輸入w(上),a(左),s(下),d(右)可以讓玩家向對應方向前進一格，但如果前進方向上有實體方塊則不會執行","Typing w(up), a (left), s (down),d(right) on the command line allows the player to move one block in that direction, but not if there is a solid block in that direction",
+                               "移动指令的另一种写法是/move + 方向参数，其中方向参数也为wasd,是指令的标准化写法，但与单参数控制效果相同","移動指令的另一種寫法是/move + 方向參數，其中方向參數也爲wasd,是指令的標準化寫法，但與單參數控制效果相同","Another way of writing the move instruction is /move + direction parameter, where the direction parameter is also wasd, which is the standardized writing of the instruction, but has the same effect as the single-parameter control",
+                               "2.放置与破坏方块","2.放置與破壞方塊","2. Place and break the block",
+                               "使用/set指令可以放置方块，格式为/set + 方向参数 + 放置距离 + 方块名称或ID","使用/set指令可以放置方塊，格式爲/set + 方向參數 + 放置距離 + 方塊名稱或ID","Blocks can be placed using the command /set in the format/Set + orientation parameter + place distance + block name or ID",
+                               "使用/break指令可以破坏方块，格式为/break + 方向参数 + 破坏距离","使用/break指令可以破壞方塊，格式爲/break + 方向參數 + 破壞距離","Using the /break command, blocks can be broken in the form of /break + direction parameter + break distance",
+                               "方向参数为w,a,s,d,放置方块名称可以为其ID号，比如 /set w 1 stone 与/set w 1 0 效果一样（stone的ID为0）","方向參數爲w,a,s,d,放置方塊名稱可以爲其ID號，比如 /set w 1 stone 與/set w 1 0 效果一樣（stone的ID爲0）","The orientation parameters are w, a, s, d, and the placed block name can be its ID number. For example, /set w 1 stone has the same effect as /set w 1 0 (the ID of the stone is 0).",
+                               "需要注意是，break指令并不能破坏边界屏障，无论是否更新（break命令设定无法破坏屏障，即使破坏，屏幕更新后也会被修补）","需要注意的是，break指令並不能破壞邊界屏障，無論是否更新（break命令設定無法破壞屏障，即使破壞，屏幕更新後也會被修補）","It should be noted that the break command does not break the border barrier, whether or not it is updated (the break command setting does not break the barrier, and even if it is broken, the screen will be repaired after update)."
+                               "3.gamemode指令","3.gamemode指令","3. The gamemode command",
+                               "gamemode指令能改变玩家游戏模式","gamemode指令能改變玩家遊戲模式","The gamemode command can change the player's gamemode",
+                               "格式/gamemode + 模式参数","格式/gamemode + 模式參數","Format/Gamemode + mode parameters",
+                               "其中模式可填survival(生存)或creative(创造),也可以填模式ID（生存-0，创造-1）","其中模式可填survival(生存)或creative(創造),也可以填模式ID（生存-0，創造-1）","The mode can be filled with survival or creative, or with the mode ID (survive-0, creation-1).",
+                               "4./open指令","4./open指令","4. /open command",
+                               "格式 /open + 界面参数","格式 /open + 界面參數","Format/Open + interface parameters",
+                               "界面可填 backpack（背包）,info(开发者信息)","界面可填 backpack（揹包）,info(開發者信息)","界面可填 backpack（揹包）,info(開發者信息)",
+                                "5./gamerule指令","5./gamerule指令","5./gamerule command",
+                                "","","",            
+};//help-基本命令语言包
+string language_help6[] = {"创造命令包括/tp,/fill,这些命令只能在创造模式下使用\n 1./tp指令\n /tp能将玩家传送至任意位置，无论其所在位置是否有实体方块，格式为/tp 传送坐标x 传送坐标y \n 需要注意的是玩家在传送后很有可能卡在方块里，当周围有方块时，玩家便无法进行移动，此时只能破坏方块或再次传送\n 2./fill指令\n /fill指令能将特定区域的所有方块替换为同一类型的方块，格式为/fill 开始坐标x 开始坐标y 结束坐标x 结束坐标y 方块参数\n其中四个坐标可为世界绝对坐标或玩家局部坐标，方块参数可为ID或名称\n上述两个命令均可适用通配符","創造命令包括/tp,/fill,這些命令只能在創造模式下使用\n 1./tp指令\n /tp能將玩家傳送至任意位置，無論其所在位置是否有實體方塊，格式爲/tp 傳送座標x 傳送座標y /n需要注意的是玩家在傳送後很有可能卡在方塊裏，當週圍有方塊時，玩家便無法進行移動，此時只能破壞方塊或再次傳送\n 2./fill指令\n /fill指令能將特定區域的所有方塊替換爲同一類型的方塊，格式爲/fill 開始座標x 開始座標y 結束座標x 結束座標y 方塊參數\n其中四個座標可爲世界絕對座標或玩家局部座標，方塊參數可爲ID或名稱\n上述兩個命令均可適用通配符","Create commands include /tp /fill, these commands can only be used in creative mode\n 1.Command /tp \n /tp players can be transported to any position,regardless of its location block is or not air,format for transport command is /tp send coordinates x coordinate y \n need to pay attention to the players after the transport is likely to be stuck in a block, when surrounded by blocks, players can't be moved, at this time can only destroy blocks or again transport. \n 2. /fill Command \n /fill a particular area of all blocks can be replaced for the same type of blocks,The format is /fill <start coordinate x> <start coordinate y> <end coordinate x> <end coordinate y> <block parameter> \n where the four coordinates can be world absolute coordinates or player local coordinates and the block parameter can be ID or name\n the above two commands are applicable to wildcards"};//help-创造指令语言包
+string language_help7[] = {"通配符(~)是用于将绝对坐标转换为局部坐标的命令符\n其中世界绝对坐标指方块在世界数组中所对的x,y下标\n而局部坐标则是在绝对坐标基础上加上玩家坐标\n 在数字前面加上通配符,则这个数字会被游戏认定为相对于玩家的坐标\n /tp 及 /fill指令可使用通配符，目前也仅有这两个命令需要坐标参与","通配符(~)是用於將絕對座標轉換爲局部座標的命令符\n其中世界絕對座標指方塊在世界數組中所對的x,y下標\n而局部座標則是在絕對座標基礎上加上玩家座標\n 在數字前面加上通配符,則這個數字會被遊戲認定爲相對於玩家的座標\n /tp 及 /fill指令可使用通配符，目前也僅有這兩個命令需要座標參與","Wildcards (~) is used to command of absolute coordinates can be converted into the local coordinate system operator\n which the absolute coordinates mean square in the world in an array of x, y /n subscript and local coordinates is based on the absolute coordinates plus player coordinates/n in front of the Numbers and wildcard, this number will be identified as coordinates relative to the player's game/n /tp and/fill instruction can use wildcards, at present, only the two commands need to coordinate"};//help-通配符语言包
+string language_help8[] = {"Indev及更早的版本(未保存)","Indev及更早的版本(未保存)","Indev and earlier versions (not saved)",
+"Indev0.0.1  最早的版本，加入了玩家，地图，移动","Indev0.0.1 最早的版本，加入了玩家，地圖，移動","The earliest version of Indev0.0.1 adds players, maps, and movement",
+"0.1.0  加入了放置与破坏方块","0.1.0 加入了放置與破壞方塊","0.1.0 added placement and destruction squares",
+"pre0.1.1  加入了方块的名称及ID，改进了放置与破坏方块指令","pre0.1.1 加入了方塊的名稱及ID，改進了放置與破壞方塊指令","Pre0.1.1 includes the name and ID of the block, improving the placing and breaking of the block instructions",
+"0.1.1正式版  加入了世界边界，拓宽了世界大小","1.0.0正式版 對底層代碼的大量改進，遊戲更名爲Survive","The official version adds world boundaries and broadens the world's size",
+"1.0.0正式版  对底层代码的大量改进，游戏更名为Survive","1.0.0正式版 對底層代碼的大量改進，遊戲更名爲Survive","The 1.0.0 official release features a number of improvements to the underlying code, and the game is renamed Survive",
+"pre1.1.1  加入了/tp /fill指令","pre1.1.1 加入了/tp /fill指令","Pre1.1.1 includes the/tp,/fill command",
+"pre1.1.2  完善了Command函数，加入了通配符~","pre1.1.2 完善了Command函數，加入了通配符~","Pre1.1.2 perfects the Command function with the addition of wildcards ~",
+"pre1.1.3  UI加入，加入了/open指令","pre1.1.3 UI加入，加入了/open指令","Pre1.1.3 UI added and added /open instruction",
+"pre1.1.4  加入了更好的地形（极 其 诡 异），并加入了背包，工作台，熔炉的UI及相关命令","pre1.1.4 加入了更好的地形（極 其 詭 異），並加入了揹包，工作臺，熔爐的UI及相關命令","Pre1.1.4 adds better terrain (which is very strange) and adds the UI for knapsack, workbench, furnace and related commands",
+"1.1.0正式版  对于所有代码进行了格式统一，删除了大量无用空行或函数,同时修复了一些bug","1.1.0正式版 對於所有代碼進行了格式統一，刪除了大量無用空行或函數,同時修復了一些bug","The 1.1.0 version unifies the format of all the code, removes a large number of useless blank lines or functions, and fixes some bugs",
+"pre1.2.1  加入了实体层，地形层，分离了方块与实体，同时对地形进行了优化","pre1.2.1 加入了實體層，地形層，分離了方塊與實體，同時對地形進行了優化","Pre1.2.1 added the solid layer and terrain layer, separated the blocks and entities, and optimized the terrain at the same time",
+"pre1.2.2  删除了pre1.2.1关于地形的更新，加入了初步模组兼容,加入了一系列常量，世界可以调整大小","pre1.2.2 刪除了pre1.2.1關於地形的更新，加入了初步模組兼容,加入了一系列常量，世界可以調整大小","Pre1.2.2 removes the pre1.2.1 terrain update, adds preliminary module compatibility, and adds a series of constants so the world can be resized",
+"pre1.2.3  最重大的更新，加入了模组的兼容与使用，信息界面，教程，并再次修订代码，删除大量无用或重复语句，有效代码量首次突破1000行","pre1.2.3 最重大的更新，加入了模組的兼容與使用，信息界面，教程，並再次修訂代碼，刪除大量無用或重複語句，有效代碼量首次突破1000行","The most significant update added module compatibility and use, information interface, tutorial, and revised the code again, removing a large number of useless or repetitive statements, effective code volume exceeded 1000 lines for the first time",
+"pre1.2.4  加入了/clone指令，成就系统加入，修复了部分UI","pre1.2.4 加入了/clone指令，成就係統加入，修復了部分UI","Pre1.2.4 added /clone instruction to join the system and repaired part of the UI",
+"1.3.0  新年更新，对所有代码进行了修订","1.3.0 新年更新，對所有代碼進行了修訂","New Year's update 1.3.0, all the code has been revised",
+"1.3.1  重大更新，加入了方块类，世界基本单位形成","1.3.1 重大更新，加入了方塊類，世界基本單位形成","1.3.1 major update, the addition of the block class, the world base unit formation",
+"1.3.2  加入了/gamerule指令,是目前最大的功能","1.3.2 加入了/gamerule指令,是目前最大的功能","1.3.2 has added the /gamerule directive, which is by far the biggest feature",
+"21w1a快照  加入了玩家的生命值，饥饿值，氧气值","21w1a快照 加入了玩家的生命值，飢餓值，氧氣值","21w1a snapshot  Add health, hunger, and oxygen to the player",
+"#现在版本：","#現在版本：","#Now Version:"};//版本信息语言包
+string language_initilize[] = {"输入世界的名称 -->","輸入世界的名稱 -->","Please print World's name -->","输入玩家的名称 -->","輸入玩家的名稱 -->","Please print player's name","您好，","您好，","Hello,","在这个世界生存下去！","在這個世界生存下去！","Survive in this world!","世界加载中-","世界加載中-","Loading World-"};//初始化语言包
+string language_kill[] = {"失败了","失敗了"," failed","饿的眼前一黑","餓的眼前一黑"," died of hunger","溺水了","溺水了"," was drowned"};
+string language_player[] = {"氧气值：","氧氣值：","Oxygen: "};
+string language_printinfo[] = {"系统: ","系統: ","System: "};//系統提示语言包
+string language_setblock[] = {"未知方块:","未知方塊:","Unknown block:"};//setblock语言包
+string language_testblock[] = {"未知方向：","未知方向：","Unknown Direction:","无法检测世界外的方块","無法檢測世界外的方塊","Unavailable to check the block outside the world","成功探测！方块名称：","成功探測！方塊名稱：","Successfully detected ! Block name: "};//testblock语言包
+string language_TitleScreen[] = {"1P工作室出品","1P工作室出品","Made by 1P Studio(One Person studio)","最后更新时间:","最後更新時間:","Latest Update Time:","现在版本：","現在版本：","Version Now:","制作人员：张子辰，潘嘉诚","製作人員：張子辰，潘嘉誠","Producer List: Pasli Zhang, JiaCheng Pan","跳过开场？是按1，否按0:","跳過開場？是按1，否按0:","Skip the begining or not? 1 for yes, 0 for no:","快捷模式(0/1) -->","快捷模式(0/1) -->","Quick Mode(0/1) -->"};//标题语言包
+string language_tp[] = {"不可能在世界之外传送实体(位置x =","不可能在世界之外傳送實體(位置x =","Impossible to transport entity outside the world(position x = ","成功传送玩家到位置x =","成功傳送玩家到位置x =","Successfully transport player to position x = "};//tp指令语言包
+string language_UIP[] = {"#坐标 x:","#座標 x:","#Position x:","#游戏模式：","#遊戲模式：","#Gamemode: ","#游戏版本：","#遊戲版本：","#Game Veision: ","#世界大小：","#世界大小：","#World Size: ","方块","方塊","blocks","#所观察的坐标 开始(","#所觀察的座標 開始(","#View Position Start(",",),结束(","),結束(","),End(","#世界名称：","#世界名稱：","#World Name:","#玩家名称：","#玩家名稱：","#Player Name: "};//调试信息语言包
+string language_UIPmods[] = {"#模组信息:","#模組信息:","#Mod Information:","#模组列表:","#模組列表:","#Mod List:","#模组命令列表：","#模組命令列表：","#Mod Command List:","#模组方块列表：","#模組方塊列表：","#Mod blocks list:","#模组物品列表：","#模組物品列表：","#Mod Item List：","个模组加载","個模組加載"," mods loaded"};//mod调试信息语言包
+string language_warncommand[] = {"未定义的游戏模式: ","未定義的遊戲模式: ","Undecleared Gamemode:","未知命令：","未知命令：","Unknown Command: "};
+
+
+struct item{
+    int type;
+    int total_num;
+    int tool_type;//作为非工具用品时默认为0
+    int damage;//攻击,作为非工具物品时默认为1,与空手攻击相同
+    int speed;//速度,作为非工具用品时默认为1,与空手相同
+}backpack[6][4],simple_crafting[2][2],crafting_table[3][3];//三个表格型U
+//函数CC,EV,ITP,ICS,LC,SCI,PI,BI,MBI,MCI,GI,CRM均为系统处理函数
+bool CompareChart(int a[3][3],int b[3][3]){
+    for(int CCx = 0;CCx<= 2;CCx++){
+        for(int CCy = 0;CCy <= 2;CCy++){
+            if(a[CCy][CCx] != b[CCy][CCx])
+                return 0;
+        }
+    }
+    return 1;
+}//用于比较合成公式
+long long ExactValue(long long input){
+    if(input > 0)
+        return input;
+    else
+        return -1 * input;
+}//求整数的绝对值
+void ITP(string input){
+    auto input_length_ITP = input.length() - 1;
+    for(int i = 0;i<= input_length_ITP;i++){
+        cout << input[i];
+        usleep(32134);//取自潘某人的阅读速度调查，根据8个样本的平均值将标准速度定为32134，大约一秒3个字
+    }
+    cout << endl;
+}
+string itos(long long input){
+    string output_ICS,output_ICS_RS;
+    int input_copy = input,input_bit;
+    do{
+        input_bit = input_copy % 10;
+        if(input_bit < 0)
+            input_bit /= -1;
+        output_ICS += input_bit + '0';
+        input_copy /= 10;
+    }while(input_copy);
+    if(input < 0)
+        output_ICS += '-';
+    for(int i = 0;i<= output_ICS.length()- 1;i++)
+        output_ICS_RS += output_ICS[output_ICS.length() - 1 - i];
+    return output_ICS_RS;
+}//将整型数字转换为字符串形式，编号 Char-4-ICS
+long long strtoi(string input){
+    long long output_SCI = 0;
+    auto input_length_SCI = input.length() - 1;
+    for(int i = 0;i<= input_length_SCI;i++){
+        if(input[i] >= '0' && input[i] <= '9'){
+            output_SCI *= 10;
+            output_SCI += (input[i]- 48);
+        }
+    }
+    for(int j = 0;j<= input_length_SCI;j++)
+    {
+        if(input[j] == '-'){
+            output_SCI *= -1;
+            break;
+        }
+    }//无论负号在哪里，都认为是负数
+    return output_SCI;
+}//将字符串转为整型数字
+char Lower_Char(char input){
+	if(input >= 'A' && input <= 'Z')
+        input += 32;
+    return input;
+}//将一个字母转成小写
+string Capital_or_Lower_String(string input){
+    auto input_length_CLS = input.length() - 1;
+    for(int i = 0;i<= input_length_CLS;i++){
+        if(input[i] >= 'A' && input[i] <= 'Z')
+            input[i] += 32;
+    }
+    return input;
+}//用于命令的转小写（大小写通用
+int PlaceID(string input){
+    for(int testplace = 0;testplace <= place_num - 1;testplace++){
+        if(input == UI_place[testplace])
+            return testplace;
+    }
+    return -1;
+}//寻找存储空间的ID
+int BlockID(string input){
+    for(int i = 0;i<= block_num - 1;i++){
+        if(block_name[i] == input)
+            return i;
+    }
+    return 14;
+}//寻找方块ID
+int BlockCharID(char input){
+    for(int i = 0;i<= block_num - 1;i++){
+        if(block_char[i] == input)
+            return i;
+    }
+    return 14;
+}//寻找方块ID
+int ModBlockID(string input){
+    for(int i = 0;i<= mod_block_total - 1;i++){
+        if(mod_block_name[i] == input)
+            return i;
+    }
+    return -1;
+}//寻找模组方块ID
+int ModCommandID(string input){
+    for(int i = 0;i<= mod_command_total - 1;i++){
+        int j = 0;
+        string real_modcommand;
+        while(mod_command_list[mod_command_total][j] != '.')
+            real_modcommand += mod_command_list[mod_command_total][j++];
+        if(real_modcommand == input)
+            return i;
+    }
+    return -1;
+}//寻找模组命令地址
+int GamemodeID(string input){
+    for(int i = 0;i<= gamemode_num - 1;i++){
+        if(gamemode_name[i] == input)
+            return i;
+    }
+    return -1;
+}//寻找游戏模式ID
+string CommandRelatedMod(int ID){
+    string RelatedMod;
+    int i = 0;
+    while(mod_command_list[ID][i] != '.')i++;
+    i++;
+    for(int j = i;j<= mod_command_list[ID].length() - 1;j++)
+        RelatedMod += mod_command_list[ID][j];
+    return RelatedMod;
+}//寻找特定命令所属的模组
+bool OutsideWorld(int x,int y){
+    if(x < 0 || x > WorldXSize || y < 0 || y > WorldYSize)//超出范围
+        return 1;
+    else
+        return 0;
+}//判断坐标是否超出世界
+
+//函数PInfo,UB,UC,CChunk,PS,US,BIP,UIP,HP为信息处理函数
+void PrintInfo(){
+    while(!info_text.empty() && info_text.top() != "\n"){
+        cout << "#" << language_printinfo[lang] << setw(27) << (info_text.top() + "#") << endl;
+        info_text.pop();
+    }
+}//输出系统提示信息
+void UpdateBackpack(){
+    for(int i = 0;i <= 3;i++){
+        for(int j = 0;j <= 5;j++){
+            if(backpack[i][j].type != 0)
+                UI[1 + j][3 + 5 * i] = item_char[backpack[j][i].type];
+        }
+    }
+    //解析物品信息
+    for(int i = 0;i <= 9;i++){
+        for(int j = 0;j <= 31;j++)
+            cout << UI[i][j] << " ";
+        cout << endl;
+    }
+}//更新背包数据
+long long square(int input){
+    return input * input;
+}//平方
+void UpdateScreen(){
+    clear
+    int startx_chunk = playerx - 7,starty_chunk = playery - 7,endx_chunk = playerx + 8,endy_chunk = playery + 8;
+    for(int y_upnow = starty_chunk;y_upnow <= endy_chunk;y_upnow++){
+        for(int x_upnow = startx_chunk;x_upnow <= endx_chunk;x_upnow++){
+            int copy_map_ID,distance_player = sqrt(square(abs(playerx - x_upnow)) + square(abs(playery - y_upnow)));
+            if(map_entity[y_upnow][x_upnow] != '\0' && map_entity[y_upnow][x_upnow] != ' ')//优先打印实体
+                copy_map_ID = -2;//map_entity[y_upnow][x_upnow];
+            else if(map_terrain[y_upnow][x_upnow] != 14 && distance_player <= vision_size)//实体层当前方块无实体且在视距范围内，则打印地形
+                copy_map_ID = Block_List[map_terrain[y_upnow][x_upnow]].ID;
+            else
+                copy_map_ID = 14;
+            chunk[y_upnow - starty_chunk][x_upnow - startx_chunk] = copy_map_ID;
+        }
+    }//将方块或实体打印到chunk数组
+    for(int y_screen = 0;y_screen <= 17;y_screen++){
+        for(int x_screen = 0;x_screen <= 17;x_screen++){
+            if(x_screen >= 1 && x_screen <= 16 && y_screen >= 1 && y_screen <= 16){
+                if(chunk[y_screen - 1][x_screen - 1] != -2){
+                    if(__linux && color_on)//当系统为linux且开启了颜色后才会显示
+                        cout << block_color[chunk[y_screen - 1][x_screen - 1]] << " ";
+                    else
+                        cout << Block_List[chunk[y_screen - 1][x_screen - 1]].show_char;
+                }
+                else
+                    cout << "!";
+            }
+            else
+                cout << screen[y_screen][x_screen];
+            if(x_screen <= 16){
+                if(y_screen == 0 || y_screen == 17)
+                    cout << "#";
+                else
+                    cout << " ";
+            }
+            cout << "\033[m";
+        }
+        cout << endl;
+    }//输出
+}//三合一的屏幕更新（更新区块，复制到屏幕，显示屏幕）
+void BriefInformationPrint(){//简明信息
+    cout << "#" << setw(34) << ("Heart: " + itos(floor(player_heart)) + "   Hunger: " + itos(floor(player_hunger)) + "#")<< endl; 
+    cout << "#" << setw(34) << (language_briefinfo[lang] + " x:" + itos(playerx) + " y:" + itos(playery) + "#") << endl;//玩家坐标
+    cout << "#" << setw(34) << (language_briefinfo[lang + 3] + ": " + gamemode + "#") << endl;//游戏模式
+    cout << "#" << setw(34) << (language_briefinfo[lang + 6] + "#") << endl;//帮助提示
+    if(!info_text.empty())
+        PrintInfo();//输出提示信息
+    cout << language_Command[lang];
+}//基本信息显示
+void UniversalInformationPrint(){
+    clear
+    cout << language_UIP[lang + 21] << worldname << endl;//世界名称
+    cout << language_UIP[lang + 24] << playername << endl;//玩家名称
+    cout << language_UIP[lang] << playerx << " y:" << playery << endl;//世界绝对坐标
+    cout << language_UIP[lang + 3] << gamemode << endl;//当前游戏模式
+    cout << language_UIP[lang + 6] << GameLatestVersion << endl;//游戏版本
+    cout << language_UIP[lang + 9] << WorldXSize << " * " << WorldYSize << " -> " << WorldXSize * WorldYSize << language_UIP[lang + 12] << endl;//内置世界大小(在无限地图后会取消)
+    cout << language_UIP[lang + 15] << playerx - 7 << "," << playery - 7 << language_UIP[lang + 18] << playerx + 8 << "," << playery + 8 << ")" << endl;//玩家看到的区块坐标
+    cout << language_UIPmods[lang] << endl;//模组信息
+    cout << language_UIPmods[lang + 3] << endl;
+    for(int i = 0;i<= mod_total - 1;i++)//模组名称
+        cout << mod_list[i] << endl;
+    cout << language_UIPmods[lang + 6] << endl;//模组命令
+    for(int i = 0;i<= mod_command_total - 1;i++)
+        cout << mod_command_list[i] << endl;
+    cout << language_UIPmods[lang + 9] << endl;//模组方块
+    for(int i = 0;i<= mod_block_total - 1;i++)
+        cout << mod_block_name[i] << "-" << mod_block_char[i] << endl;
+    cout << language_UIPmods[lang + 12] << endl;//模组物品
+    for(int i = 0;i<= mod_item_total - 1;i++)
+        cout << mod_item_name[i] << "-" << mod_item_char[i] << endl;
+    cout << "#" << mod_total << language_UIPmods[lang + 15] << endl;//已加载的模组总数
+    cout << language_Command[lang];//命令行
+}//全部信息显示
+void HelpPrint(){
+    int command_help = 1,choose_return = 1;
+    clear
+    cout << language_help1[lang] << endl;
+    cout << language_help1[lang + 3] << endl;
+    cout << language_help1[lang + 6] << endl;
+    cout << language_help1[lang + 9] << endl;
+    cout << language_help1[lang + 12] << endl;
+    while(choose_return){
+        cout << language_help2[lang];
+        cin >> choose_return;
+        if(choose_return == 1){
+            clear
+            cout << language_help3[lang] << GameLatestVersion << endl;
+            cout << language_help3[lang + 3] << endl;
+            cout << language_help3[lang + 6] << endl;
+        }
+        else if(choose_return == 2){
+            clear
+            cout << language_help4[lang] << endl;
+            cout << language_help4[lang + 3] << endl;
+            cout << language_help4[lang + 6] << endl;
+            cout << language_help4[lang + 9] << endl;
+            cout << language_help2[lang] << endl;
+            cin >> command_help;
+            clear
+            if(command_help == 1){
+                for(int i = 0;i<= 15;i++)
+                    cout << language_help5[lang + i * 3] << endl;
+            }
+            else if(command_help == 2)
+                cout << language_help6[lang] << endl;
+            else if(command_help == 3){
+                cout << language_help7[lang] << endl;
+            }
+            else continue;
+        }
+        else if(choose_return == 3){
+            clear
+            for(int i = 0;i<= 19;i++){
+                cout << language_help8[lang + i * 3];
+                if(i< 19)cout << endl;
+            }
+            cout << GameLatestVersion << endl;
+        } 
+        else if(choose_return == 4){
+            clear
+            cout << "模组的加入需要Addmod函数，格式为Addmod(模组名称,<模组新增命令1><模组新增命令2>,<模组新增方块1，外观显示字符><模组新增方块2，外观显示字符><...>,<模组新增物品1，外观显示字符><模组新增物品2，外观显示字符><...>)" << endl;
+            cout << "每个模组在加入时会给新增的命令，方块，物品加上\".模组名称\"的后缀，用以区分不同模组的相同元素" << endl;
+            cout << "加入时，需要在Command函数的\"else if(ModCommandID(comm) != -1){\"行加入模组的调用，对于每个模组都有一个ID，取决于加入的顺序,在游戏中就可以使用模组功能" << endl;
+        }
+        else break;
+    }
+}//教程
+void Achievement(int ID){
+    string info_achievement;
+    if(!achievement_get[ID]){
+        info_achievement = language_achievement[lang] + language_achievement[ID * 3 + 3 + lang];
+        info_text.push(info_achievement);
+        achievement_get[ID] = 1;
+    }
+}//成就的输出
+
+//函数ST,SST,PB,PM,SBlock,BBlock,TP,Fill,Clone,EI,GI,Command,TYC,SSBlock,STree,CBlock,CW,AM,WI为游戏玩法及内容执行函数
+void UpdateBlockInfo(){
+    for(int i = 0;i <= block_num - 1;i++){
+        Block_List[i].ID = i;
+        Block_List[i].hardness = block_hardness[i];
+        Block_List[i].explosion_resistance = block_explosion_resistance[i];
+        Block_List[i].name = block_name[i];
+        Block_List[i].show_char = block_char[i];
+    }
+}//初始化方块信息
+void ShowBlock(int id){
+    cout << "Block " << id << "  name: " << Block_List[id].name << "  Show char: " << Block_List[id].show_char << "  hardness: " << Block_List[id].hardness << "  explosion_resistance: " << Block_List[id].explosion_resistance << " tag: " << Block_List[id].tag << endl;
+}
+void AddTag(int type,string block_list){
+    for(int i = 0;i<= block_list.length() - 1;i++){
+        string addtag_block;
+        if(block_list[i] != ','){
+            while(block_list[i] != ',' && i <= block_list.length() - 1){
+                addtag_block += block_list[i];
+                i++;
+            }
+        }
+        if((Block_List[BlockID(addtag_block)].tag).length() > 0){//若tag非空则加入逗号分隔
+            Block_List[BlockID(addtag_block)].tag += ",";
+        }
+        Block_List[BlockID(addtag_block)].tag += tag_type[type];
+    }
+}//为方块加入标签
+bool TestTag(string target,string block_tag){
+    string tag_block_list[32];
+    int tag_num_block = 0;
+    for(int i = 0;i<= block_tag.length() - 1;i++){
+        string tagnow_block;
+        if(block_tag[i] != ','){
+            while(block_tag[i] != ',' && i <= block_tag.length() - 1)
+                tagnow_block += block_tag[i++];
+            tag_block_list[tag_num_block++] = tagnow_block;
+        }
+    }//分隔标签
+    for(int i = 0;i<= tag_num_block;i++){
+        if(tag_block_list[i] == target)
+            return 1;
+    }
+    return 0;
+}//查找方块是否有特定的标签
+void SpawnTerrain(int spawnx,int spawny,int height,int steep){
+    for(int i = 1;i <= height - 1;i++){
+        int change_startx = (rand()%(i + steep)) * 0.6;
+        int change_endx = (rand()%(i + steep)) * 0.6;
+        int start_layerx = spawnx - change_startx + rand()%3;
+        int end_layerx = spawnx + change_endx + rand()%3;
+        for(int j = start_layerx;j <= end_layerx;j++)
+            map_terrain[i][j] = 0;
+    }
+}//生成地形
+void SpawnSurpriseTerrain(int startx,int starty,int spawn_type){
+    if(spawn_type == 1){
+        map_terrain[starty - 2][startx - 2] = map_terrain[starty - 2][startx - 1] = map_terrain[starty - 2][startx + 1] = map_terrain[starty - 2][startx + 2] = 0;
+        for(int x = startx - 3;x <= startx + 3;x++)
+            map_terrain[starty - 1][x] = 0;
+        for(int x = startx - 2;x <= startx + 2;x++)
+            map_terrain[starty][x] = 0;
+        for(int x = startx - 1;x <= startx + 1;x++)
+            map_terrain[starty - 1][x] = 0;
+        map_terrain[starty - 2][startx] = 0;
+    }
+    else
+        DefaultUpdate;
+}//生成彩蛋
+void PlayerBorn(int spawnx_player,int spawny_player){   
+    bool flag_find_spot = 0;
+    int startx_spawn = spawnx_player,starty_spawn = spawny_player,endx_spawn = spawnx_player,endy_spawn = spawny_player; 
+    while(!flag_find_spot){
+        for(int a = startx_spawn;a <= endx_spawn;a++){
+            for(int b = starty_spawn;b<= endy_spawn;b++){
+                if(TestTag(tag_type[4],Block_List[map_terrain[a][b]].tag)){// && !TestTag(tag_type[4],Block_List[map_terrain[a + 1][b]].tag)){//当且仅当生成位置为空气且下方为实体方块时成功
+                    map_entity[a][b] = '!';
+                    respawny = a;
+                    respawnx = b;
+                    playerx = b;
+                    playery = a;
+                    flag_find_spot = 1;
+                    break;
+                }
+            }
+            if(flag_find_spot)
+                break;
+            if(startx_spawn >= 0 && starty_spawn >= 0 && endx_spawn <= 255 && endy_spawn <= 255)//使范围坐标不出界{ 
+                startx_spawn--;
+                starty_spawn--;
+                endx_spawn++;
+                endy_spawn++;
+            }
+    }
+    player_heart = 20.0;
+    player_hunger = 10.00;
+    player_full = 5.00;
+    player_oxygen = 20;
+}//会尽可能的靠近给定出生点出生，并避开方块
+void PlayerMove(char direction){
+        Achievement(0);
+    if(direction >= 'A' &&direction <= 'Z')
+        direction += 32;
+    if(direction == 'w'){
+        if(TestTag(tag_type[4],Block_List[map_terrain[playery - 1][playerx]].tag)&& playery - 1 >= (WorldYSize- boarder_y) / 2){
+            map_entity[playery][playerx] = ' ';
+            map_entity[--playery][playerx] = '!';
+        }
+    }//上移
+    else if(direction == 's'){
+        if(TestTag(tag_type[4],Block_List[map_terrain[playery + 1][playerx]].tag) && playery + 1 <= (WorldYSize+ boarder_y) / 2){
+            map_entity[playery][playerx] = ' ';
+            map_entity[++playery][playerx] = '!';
+        }
+    }//下移
+    else if(direction == 'a'){
+        if(TestTag(tag_type[4],Block_List[map_terrain[playery][playerx - 1]].tag) && playerx - 1 >= (WorldXSize- boarder_x) / 2){
+            map_entity[playery][playerx] = ' ';
+            map_entity[playery][--playerx] = '!';
+        }else if(TestTag(tag_type[4],Block_List[map_terrain[playery - 1][playerx - 1]].tag) && playerx - 1 >= (WorldXSize- boarder_x) / 2 && playery - 1 >= (WorldYSize- boarder_y) / 2 && auto_jump){
+            map_entity[playery][playerx] = ' ';
+            map_entity[--playery][--playerx] = '!';
+        }//自动跳跃
+        else
+            DefaultUpdate;
+    }//左移
+    else if(direction == 'd'){
+        if(TestTag(tag_type[4],Block_List[map_terrain[playery][playerx + 1]].tag) && playerx + 1 <= (WorldXSize+ boarder_x) / 2){
+            map_entity[playery][playerx] = ' ';
+            map_entity[playery][++playerx] = '!';
+        }else if(TestTag(tag_type[4],Block_List[map_terrain[playery - 1][playerx + 1]].tag) && playerx + 1 <= (WorldXSize+ boarder_x) / 2 && playery - 1 >= (WorldYSize- boarder_y) / 2 && auto_jump){
+            map_entity[playery][playerx] = ' ';
+            map_entity[--playery][++playerx] = '!';
+        }//自动跳跃
+        else
+            DefaultUpdate;
+    }//右移
+    else//原地更新
+        DefaultUpdate;
+    //注：玩家移动逻辑为当目标方块带有through标签时就移动，在此情况下，树叶，空气，木头（是的木头也能穿过！）,水，岩浆都能穿过
+}//玩家的基础移动
+void SetBlock(char direction,int distance,string block_type){
+    char setblockchar;
+    string info_set;
+    Achievement(1);
+    if(block_type.length() > 1){
+        if(BlockID(block_type) != -1)//自带方块
+            setblockchar = block_char[BlockID(block_type)];
+        else if(ModBlockID(block_type) != -1)//模组方块
+            setblockchar = mod_block_char[ModBlockID(block_type)];
+        else{
+            info_set = language_setblock[lang] + block_type;
+            info_text.push(info_set);
+            setblockchar = default_block_char;
+        }
+    }
+    else
+        setblockchar = block_char[strtoi(block_type)];
+    direction = Lower_Char(direction);
+    if(direction == 'w'){
+        if(map_terrain[playery - distance][playerx] == 5 && playery - distance >= 0)
+            map_terrain[playery- distance][playerx] = BlockCharID(setblockchar);
+        else
+            DefaultUpdate;
+    }
+    else if(direction == 's'){
+        if(map_terrain[playery + distance][playerx] == 5 && playery + distance <= 261)
+            map_terrain[playery + distance][playerx] = BlockCharID(setblockchar);
+        else
+            DefaultUpdate;
+    }
+    else if(direction == 'a'){
+        if(map_terrain[playery][playerx - distance] == 5 && playerx - distance >= 0)
+            map_terrain[playery][playerx - distance] = BlockCharID(setblockchar);
+        else
+            DefaultUpdate;
+    }
+    else if(direction == 'd'){
+        if(map_terrain[playery][playerx + distance] == 5 && playerx + distance <= 266)
+            map_terrain[playery][playerx + distance] = BlockCharID(setblockchar);
+        else 
+            DefaultUpdate;
+    }
+    else
+        DefaultUpdate;
+}//放置方块
+void BreakBlock(char direction,int distance){
+    Achievement(2);
+    if(direction >= 'A' &&direction <= 'Z')
+        direction += 32;
+    if(direction == 'w'){
+        if(playery - distance > 0 && !TestTag(tag_type[0],Block_List[map_terrain[playery - distance][playerx]].tag))//检测目标方块是否带有unbreakable标签，如果无则破坏
+            map_terrain[playery - distance][playerx] = 5;
+        else
+            Achievement(3);
+    }
+    else if(direction == 's'){
+        if(playery + distance <= WorldYSize && !TestTag(tag_type[0],Block_List[map_terrain[playery + distance][playerx]].tag))
+            map_terrain[playery + distance][playerx] = 5;
+        else
+            Achievement(3);
+    }
+    else if(direction == 'a'){
+        if(playerx - distance > 0 &&!TestTag(tag_type[0],Block_List[map_terrain[playery][playerx - distance]].tag))
+            map_terrain[playery][playerx - distance] = 5;
+        else
+            Achievement(3);
+    }
+    else if(direction == 'd'){
+        if(playerx + distance <= WorldXSize && !TestTag(tag_type[0],Block_List[map_terrain[playery][playerx +distance]].tag))
+            map_terrain[playery][playerx + distance] = 5;
+        else
+            Achievement(3);
+    }
+    else
+        DefaultUpdate;
+}//破坏方块
+void Transportation(string command_transport){
+    int word_num_transport = 0,destinationx,destinationy,position_transport = 0;
+    string words_transport[99];
+    for(int i = 0;i<= command_transport.length() - 1;i++){
+        string word_transport;
+        if(command_transport[i] != ' '){
+            while(command_transport[i] != ' ' && i <= command_transport.length() - 1)
+                word_transport += command_transport[i++];
+            words_transport[word_num_transport] = word_transport;
+            word_num_transport++;
+        }
+    }//找出单词
+    if((words_transport[0])[0] == '~')
+        position_transport += playerx;
+    position_transport +=strtoi(words_transport[0]);
+    destinationx = position_transport;
+    position_transport = 0;
+    if((words_transport[1])[0] == '~')
+        position_transport += playery;    
+    position_transport +=strtoi(words_transport[1]);
+    destinationy = position_transport;
+    string info_tp;
+    if(OutsideWorld(destinationx,destinationy)){//传送到世界外
+        info_tp = language_tp[lang] + itos(destinationx) + " y = " + itos(destinationy) + ")";
+        info_text.push(info_tp);
+    }
+    else{
+        map_entity[playery][playerx] = ' ';
+        map_entity[destinationy][destinationx] = '!';
+        playerx = destinationx;
+        playery = destinationy;
+        info_tp = language_tp[lang + 3] + itos(destinationx) + " y = " + itos(destinationy) + ")";
+        info_text.push(info_tp);
+    }
+    if(playerx < 5 || playerx > WorldXSize - 5 || playery < 5 || playery > WorldYSize - 5)
+        Achievement(4);
+}//tp(传送指令),适用通配符，用于将玩家传送至指定位置
+void Fill(string command_fill){
+    int word_num = 0,startx_fill,starty_fill,endx_fill,endy_fill,block_type_fill;
+    char fill_block_char;
+    string words_fill[99];
+    for(int i = 0;i<= command_fill.length() - 1;i++){
+        string word_fill;
+        if(command_fill[i] != ' ')/*非空格*/{
+            while(command_fill[i] != ' ' && i <= command_fill.length() - 1)
+                word_fill += command_fill[i++];
+            words_fill[word_num++] = word_fill;
+        }
+    }//找出单词
+    for(int i = 0;i <= word_num;i++){
+        int position_fill = 0;
+        if((words_fill[i])[0] == '~'){
+            if(i == 0 || i == 2)
+                position_fill += playerx;
+            else if(i == 1 || i == 3)
+                position_fill += playery;
+        }//局部坐标转绝对坐标
+        position_fill += strtoi(words_fill[i]);
+        if(i == 0)
+            startx_fill = position_fill;
+        else if(i == 1)
+            starty_fill = position_fill;
+        else if(i == 2)
+            endx_fill = position_fill;
+        else if(i == 3)
+            endy_fill = position_fill;    
+        else
+            break;
+    }
+    int fill_exact_ID = BlockID(words_fill[4]);
+    string info_fill;
+    long long fill_total = (max(startx_fill,endx_fill) - min(startx_fill,endx_fill) + 1) * (max(starty_fill,endy_fill) - min(starty_fill,endy_fill) + 1);
+    if(fill_total <= maxinum_fill && !OutsideWorld(min(startx_fill,endx_fill),min(starty_fill,endy_fill)) && !OutsideWorld(min(starty_fill,endy_fill),max(starty_fill,endy_fill))){
+        for(int i = min(startx_fill,endx_fill);i<= max(startx_fill,endx_fill);i++){
+            for(int j = min(starty_fill,endy_fill);j<= max(starty_fill,endy_fill);j++)
+                map_terrain[j][i] = fill_exact_ID;
+        }
+        info_fill = language_fill[lang] + itos(fill_total) + language_fill[lang + 3];
+        info_text.push(info_fill);
+    }//成功填充
+    else if(OutsideWorld(min(startx_fill,endx_fill),min(starty_fill,endy_fill)) || OutsideWorld(min(starty_fill,endy_fill),max(starty_fill,endy_fill))){
+        info_fill = language_fill[lang + 6] + itos(min(startx_fill,endx_fill)) + "," + itos(min(starty_fill,endy_fill)) + "),(" + itos(max(startx_fill,endx_fill)) + "," + itos(max(starty_fill,endy_fill)) + ")";
+        info_text.push(info_fill);
+    }//超出世界范围
+    else{
+        info_fill = language_fill[lang + 9] + itos(fill_total) + " >" + itos(maxinum_fill) + ")";
+        info_text.push(info_fill);
+    }//方块过多
+}//fill(填充指令),适用通配符,以特定方块填充某个区域
+void Clone(string comm_clone){
+    int word_num = 0,startx_clone = 0,starty_clone = 0,endx_clone = 0,endy_clone = 0,copy_startx = 0,copy_starty= 0;
+    string words_clone[99];
+    for(int i = 0;i<= comm_clone.length() - 1;i++){
+        if(comm_clone[i] != ' ')/*非空格*/{
+            while(comm_clone[i] != ' ' && i <= comm_clone.length() - 1)
+                words_clone[word_num] += comm_clone[i++];
+            word_num++;
+        }
+    }//找出单词
+    for(int i = 0;i <= word_num;i++){
+        int position_clone = 0;
+        if(words_clone[i][0] == '~'){
+            if(i == 0 || i == 2 || i == 4)
+                position_clone += playerx;
+            else
+                position_clone += playery;
+
+        }//局部坐标转绝对坐标
+        position_clone += strtoi(words_clone[i]);
+        if(i == 0)
+            startx_clone = position_clone;
+        else if(i == 1)
+            starty_clone = position_clone;
+        else if(i == 2)
+            endx_clone = position_clone;
+        else if(i == 3)
+            endy_clone = position_clone;    
+        else if(i == 4)
+            copy_startx = position_clone;
+        else if(i == 5){
+            copy_starty = position_clone;
+            break;
+        }
+    }
+    string info_clone;
+    int clone_startx = min(startx_clone,endx_clone),clone_starty = min(starty_clone,endy_clone);
+    if(OutsideWorld(clone_startx,clone_starty) || OutsideWorld(max(startx_clone,endx_clone),max(starty_clone,endy_clone)) || OutsideWorld(copy_startx,copy_starty)){//超出世界范围
+        info_clone = language_clone[lang] + itos(clone_startx) + "," + itos(clone_startx) + ")(" + itos(max(startx_clone,endx_clone)) + "," + itos(max(starty_clone,endy_clone)) + "),(" + itos(copy_startx) + "," + itos(copy_starty) + ")";
+        info_text.push(info_clone);
+    }
+    else{
+        for(int i = 0;i <= max(starty_clone,endy_clone) - clone_starty;i++){
+            for(int j = 0;j <= max(startx_clone,endx_clone) - clone_startx;j++){
+                map_terrain[copy_starty + i][copy_startx + j] = map_terrain[clone_starty + i][clone_startx + j];
+            }
+        }
+        info_clone = language_clone[lang + 3] + itos(clone_startx) + "," + itos(clone_startx) + "),(" + itos(max(startx_clone,endx_clone)) + "," + itos(max(starty_clone,endy_clone)) + language_clone[lang + 9] + itos(copy_startx) + "," + itos(copy_starty) + ")";
+    }
+}//clone(克隆指令),适用通配符，将一个地区的方块复制到另一个地区
+void ExchangeItem(string place1,int place1_x,int place1_y,string place2,int place2_x,int place2_y){
+    switch(PlaceID(place1)){
+        case 0:
+            switch(PlaceID(place2)){
+                case 0:
+                    swap(backpack[place1_y][place1_x],backpack[place2_y][place2_x]);
+                    break;
+                case 1:
+                    swap(backpack[place1_y][place1_x],simple_crafting[place2_y][place2_x]);
+                    break;
+                case 2:
+                    swap(backpack[place1_y][place1_x],crafting_table[place2_y][place2_x]);
+                    break;
+                default:
+                    warningtext = "Unknowing scope:" + place2;
+                    break;
+            }
+            break;
+        //在背包时
+        case 1:
+            switch(PlaceID(place2)){
+                case 0:
+                    swap(simple_crafting[place1_y][place1_x],backpack[place2_y][place2_x]);
+                    break;
+                case 1:
+                    swap(simple_crafting[place1_y][place1_x],simple_crafting[place2_y][place2_x]);
+                    break;
+                case 2:
+                    swap(simple_crafting[place1_y][place1_x],crafting_table[place2_y][place2_x]);
+                    break;
+                default:
+                    warningtext = "Unknowing scope:" + place2;
+                    break;
+            }
+        //在简易工作台时
+        case 2:
+            switch(PlaceID(place2)){
+                case 0:
+                    swap(crafting_table[place1_y][place1_x],backpack[place2_y][place2_x]);
+                    break;
+                case 1:
+                    swap(crafting_table[place1_y][place1_x],simple_crafting[place2_y][place2_x]);
+                    break;
+                case 2:
+                    swap(crafting_table[place1_y][place1_x],crafting_table[place2_y][place2_x]);
+                    break;
+                default:
+                    warningtext = "Unknowing scope:" + place2;
+                    break;
+            }
+            break;
+        //在工作台时
+        default:
+            warningtext = "Unknowing scope:" + place1;
+    }
+}//交换物品
+void GiveItem(int give_type,int give_total_num,int give_tool_type,int give_damage,int give_speed){
+    int give_x,give_y;
+    for(int i = 0;i <= 5;i++){
+        for(int j = 0;j <= 3;j++){
+            if(backpack[i][j].type == -1){
+                give_x = i;
+                give_y = j;
+                break;
+            }
+        }
+    }
+    backpack[give_x][give_y].type = give_type;
+    backpack[give_x][give_y].type = give_total_num;
+    backpack[give_x][give_y].type = give_tool_type;
+    backpack[give_x][give_y].damage = give_damage;
+    backpack[give_x][give_y].speed = give_speed;
+}//给予物品
+void TestBlock(char direction_test,int distance){
+    direction_test = Lower_Char(direction_test);
+    string test_block_name,warningtext_test;
+    if(direction_test == 'a' && !OutsideWorld(playerx - distance,playery))
+        test_block_name = block_name[map_terrain[playery][playerx - distance]];
+    else if(direction_test == 'd' && !OutsideWorld(playerx + distance,playery))
+        test_block_name = block_name[map_terrain[playery][playerx + distance]];
+    else if(direction_test == 'w' && !OutsideWorld(playerx,playery - distance))
+        test_block_name = block_name[map_terrain[playery - distance][playerx]];
+    else if(direction_test == 's' && !OutsideWorld(playerx,playery + distance))
+        test_block_name = block_name[map_terrain[playery + distance][playerx]];
+    else if(direction_test != 'a' && direction_test != 'd' && direction_test != 'w' && direction_test != 's'){
+        warningtext_test = language_testblock[lang];
+        warningtext_test += direction_test;
+    }
+    else
+        warningtext_test += language_testblock[lang + 3];
+    if(warningtext_test != "\n")
+        info_text.push(warningtext_test);
+    if(test_block_name != "\n"){
+        string test_command = language_testblock[lang + 6] + test_block_name;
+        info_text.push(test_command);
+    }
+}//查询方块名称
+/*
+b = bool类型参数
+i = int类型参数
+s = string类型参数
+三种类型皆从字符串转化而来
+*/
+void UpdateBoarder(int xlen,int ylen){
+    world_sx = WorldXSize / 2 - xlen / 2,world_ex = WorldXSize / 2 + xlen / 2,world_sy = WorldYSize / 2 -ylen / 2,world_ey = WorldYSize / 2 + ylen / 2;
+    for(int i = 0;i<= WorldXSize;i++){
+        for(int j = 0;j <= WorldYSize;j++){
+            if(i == world_sx || i == world_ex || j == world_sy || j == world_ey)
+                map_terrain[j][i] = BlockID("barrier");
+        }
+    }
+}
+int gamerule_ID(string input){
+    for(int i = 0;i<= gamerule_num - 1;i++){
+        if(input == gamerule_list[i])
+            return i;
+    }
+    return -1;
+}
+string depress_para(char para_type){
+    if(para_type == 'b')
+        return "bool";
+    else if(para_type == 'i')
+        return "int";
+    else if(para_type == 's')
+        return "string";
+    else
+        return "default";
+}//生成错误信息-标准形式的参数
+string depress_paralist(string paralist){
+    string res_dp;
+    for(int i = 0;i<= paralist.length() - 1;i++){
+        res_dp += depress_para(paralist[i]);
+        if(i < paralist.length() - 1)
+            res_dp += ",";
+    }
+    return res_dp;
+}
+string success_gamerule(int type){
+    if(type >= 0)
+        return ("gamerule." + gamerule_list[type] + language_gamerule[lang]);
+    else
+        return "default";
+}
+string bool_para(bool input){
+    if(input)
+        return "true";
+    else
+        return "false";
+}
+void Gamerule(string gamerule_input){
+    string words_gamerule[999];
+    Achievement(6);
+    int words_num_gamerule = 0,length_Gi = gamerule_input.length() - 1;
+    for(int i = 0;i<= length_Gi;i++){
+        if(gamerule_input[i] != ' '){
+            while(gamerule_input[i] != ' '&& i <= length_Gi)
+                words_gamerule[words_num_gamerule] += gamerule_input[i++];
+            words_num_gamerule++;
+        }
+    }//分词系统
+    int visit_parameterID = gamerule_ID(words_gamerule[0]);//第一个单词用于识别ID
+    int parameter_listi[99] = {0},ipara_num = 0,bpara_num = 0,spara_num = 0;
+    bool parameter_listb[99] = {0};
+    string parameter_lists[99];
+    if(1 > words_num_gamerule){
+        info_text.push(language_gamerule[lang + 3]);
+        return ;
+    }
+    for(int i = 1;i<= words_num_gamerule;i++){
+        char parameter_type = gamerule_parameter[visit_parameterID][i - 1];
+        if(parameter_type == 'b')
+            parameter_listb[bpara_num++] = strtoi(words_gamerule[i]);
+        else if(parameter_type == 'i')
+            parameter_listi[ipara_num++] = strtoi(words_gamerule[i]);
+        else if(parameter_type == 's')
+            parameter_lists[spara_num++] = words_gamerule[i];
+    }
+    switch(visit_parameterID){
+        case 0://color-颜色开启或关闭
+            if(bpara_num == 1){//正确的数目
+                color_on = parameter_listb[0];
+                info_text.push(success_gamerule(0) + bool_para(parameter_listb[0]));
+            }
+            else{
+                if(bpara_num < 1)//无参数
+                    info_text.push("Error: Missing parameter(type = " + depress_paralist(gamerule_parameter[0]) + ") for command:/gamerule color");
+                    //翻译："错误:对于/gamerule color指令缺失了布尔类型参数"
+                else
+                    info_text.push("Error: Too many parameters for command: /gamerule color which required only 1");
+                    //翻译："错误:/gamerule color指令"
+            }
+            break;
+        case 1://vision_size-能看见的地图大小（最大16*16,标准视野）
+            if(ipara_num == 1){
+                vision_size = parameter_listi[0];
+                info_text.push(success_gamerule(1) + itos(parameter_listi[0]));
+            }    
+            break;
+        case 2://boarder_size-边界大小
+            if(ipara_num == 2){
+                boarder_x = parameter_listi[0],boarder_y = parameter_listi[1];
+                UpdateBoarder(boarder_x,boarder_y);
+                info_text.push(success_gamerule(2) + itos(parameter_listi[0]) + "*" + itos(parameter_listi[1]));
+            }
+            break;
+        case 3://standardized_command-标准化命令（不能使用不包含/标识符的命令）
+            if(bpara_num == 1){
+                standardized_command = parameter_listb[0];
+                info_text.push(success_gamerule(3) + bool_para(parameter_listb[0]));
+            }
+            break;
+        case 4://maxinum_fill-方块填充的最大数量,调整/fill指令的上限
+            if(ipara_num == 1){
+                maxinum_fill = parameter_listi[0];
+                info_text.push(success_gamerule(4) + itos(parameter_listi[0]));
+            }  
+            break;
+        case 5://player_name-玩家的名字
+                playername = parameter_lists[0];
+                info_text.push(success_gamerule(5) + parameter_lists[0]);
+                info_text.push("Hello," + playername);
+            break;
+        case 6://world_name-世界的名字
+                worldname = parameter_lists[0];
+                info_text.push(success_gamerule(6) + parameter_lists[0]);
+                info_text.push("Hello," + worldname + "!");
+            break;
+        case 7://auto_jump-自动跳跃
+                auto_jump = parameter_listb[0];
+                info_text.push(success_gamerule(7) + bool_para(parameter_listb[0]));
+            break;
+        case 8://respawn_point-重生点
+            if(parameter_listi[0] > 0 && parameter_listi[1] > 0 && parameter_listi[1] < WorldYSize){
+                respawnx = parameter_listi[0];
+                respawny = parameter_listi[1];
+                info_text.push(success_gamerule(8) + itos(parameter_listi[0]) + "," + itos(parameter_listi[0]));
+            }
+            break;
+        default:
+            info_text.push("Unknowing gamerule: " + words_gamerule[0]);
+            break;
+    }
+}
+int RandomPMChange(int input){
+    if(rand()%1000000 < 500000)//超级大基数
+        return -1 * input;
+    else
+        return input;
+}//随机转换正负
+int TerrainYChange(int height_terrain,int biome_type){//改变地形生成高度，参数为当前高度及生物群系类型，比如平原的地形相对平缓，不容易发生改变,高度更改概率取决于每个生物群系的陡峭值
+    int result_changey = ((0 - biome_steep[biome_type]) + rand()%(biome_steep[biome_type]*2)) / 4,result_y = height_terrain + RandomPMChange(result_changey);
+    if(rand()%100 <= biome_steep[biome_type] && !OutsideWorld(WorldXSize / 2,result_y))//符合条件
+        return result_y;//陡峭程度百分比 * 在(±陡峭程度范围/5)内的随机数
+    else if(OutsideWorld(6,result_y))
+        return 6;
+    else
+        return height_terrain;
+}//对生成高度进行变化处理
+void SpawnSurfaceBlock(int x,int starty,int biome_type){
+    for(int SSB_y = WorldYSize - starty;SSB_y <= WorldYSize;SSB_y++){
+        int surface_incursion_p = 100 - (SSB_y - starty) * 20,bedrock_incursion_p = 100 - (WorldYSize - 6 - SSB_y) * 20;
+        if(rand()%100 <= surface_incursion_p)
+            map_terrain[SSB_y][x] = biome_surface_block[biome_type];
+        else if(rand()%100 <= bedrock_incursion_p)
+            map_terrain[SSB_y][x] = BlockID("bedrock");
+        else
+            map_terrain[SSB_y][x] = BlockID("stone");
+    }
+    for(int SSB_y = 0;SSB_y <= WorldYSize;SSB_y++){
+        if(SSB_y >= WorldYSize - sea_level && map_terrain[SSB_y][x] == BlockID("air"))
+            map_terrain[SSB_y][x] = BlockID("water");
+    }
+}//生成每个生物群系的地表方块
+void XmasLeave(int size_tree,int spawnx,int spawny){
+    int start_treex = spawnx - size_tree / 2,end_treex = spawnx + size_tree / 2,now_y = spawny;
+    while(start_treex <= end_treex){
+        for(int x = start_treex;x<= end_treex;x++){
+            if(map_terrain[now_y][x] != BlockID("wood"))
+                map_terrain[now_y][x] = BlockID("leave");
+        }
+        start_treex++;
+        end_treex--;
+        now_y--;
+    }
+}//生成圣诞树树叶
+void SpawnTree(int size_tree,int spawnx,int spawny,int tree_type){
+    srand(time(0));
+    int size_branch = size_tree - rand()%size_tree;
+    for(int z = 0;z<= size_branch;z++)
+        map_terrain[spawny - z][spawnx] = BlockID("wood");//树干
+    if(tree_type == 0){
+        int midx_tree = spawnx,midy_tree = spawny - size_branch;
+        for(int x = spawnx - size_tree;x<= spawnx + size_tree;x++){
+           for(int a = midy_tree + size_tree / 1.3;a>= midy_tree - size_tree - size_tree / 1.5;a--){
+                if(sqrt((x - spawnx)*(x - spawnx) + (a - midy_tree)*(a - midy_tree)) * 0.8 <= size_tree && map_terrain[a][x] != BlockID("wood") && !OutsideWorld(x,a))//未出世界+在可生成距离内+当前位置不是树干==>树叶（在最底层时会消减一层）
+                    map_terrain[a][x] = BlockID("leave");
+            }
+        }
+    }
+    else if(tree_type == 1){
+        int xmas_tree_y = spawny - size_branch,size_leave = rand()%size_tree + 4;
+        for(int z = 0;z<= rand()%size_tree;z++){
+            XmasLeave(size_leave,spawnx,xmas_tree_y);
+            xmas_tree_y -= (rand()%size_tree / 2 + 2);
+            size_leave -= (rand()%2 + 1);
+        }//通过源代码还是可以使用圣诞树的，就当彩蛋吧
+    }
+    else
+        DefaultUpdate;
+    //新年快乐！
+}//生成树木
+void SpawnCave(int startx,int starty,int size_cave){
+    
+}//生成洞穴
+void CreateChunk(int chunk_ID,int biome_chunk){
+    int height_chunk = sea_level;
+    for(int i = 0;i<= 15;i++){
+        SpawnSurfaceBlock(i + chunk_ID * 16,height_chunk,0);
+        srand((chunk_ID * 16 + i));
+        height_chunk += RandomPMChange(ceil(rand()%biome_steep[biome_chunk] * 1.0 / 10));
+    }
+    for(int i = 0;i<= rand()%10;i++){
+        if(map_terrain[sea_level][i + chunk_ID * 16] == BlockID("grass") && rand()%100 < biome_tree_density[biome_chunk])
+            SpawnTree(rand()%biome_tree_maxsize[biome_chunk],rand()%16 + chunk_ID * 16,sea_level - 1,rand()%2);
+    }
+    chunk_discovered[chunk_ID] = 1;
+}//生成区块
+void UpdateChunk(){
+    chunk_now = playerx / 16;
+    if(!chunk_discovered[chunk_now - 1])
+        CreateChunk(chunk_now - 1,0);
+    if(!chunk_discovered[chunk_now])
+        CreateChunk(chunk_now,0);
+    if(!chunk_discovered[chunk_now + 1])
+        CreateChunk(chunk_now + 1,0);
+}//更新区块-pre0.2.6.100加入随玩家移动而更新的区块
+string CreateChunkCode(int ID){
+    string block_list,result_chunkcode;
+    char now_block_chunk = '?';
+    int continus_num = 0,startx_chunk = ID * 16;
+    for(int j = 0;j<= WorldYSize - 1;j++){
+        for(int i = 0;i<= 15;i++)
+           block_list += map_terrain[j][i + startx_chunk];
+    }
+    for(int i = 0;i<= block_list.length() - 1;i++){
+        string continus_block;
+        if(now_block_chunk != block_list[i]){
+            now_block_chunk = block_list[i];
+            while(block_list[i] == now_block_chunk)
+                continus_block += block_list[i++];
+        }
+        if(continus_block.length() > 3)
+            result_chunkcode += (now_block_chunk + itos(continus_block.length()));
+        else 
+            result_chunkcode += continus_block;
+    }
+    return result_chunkcode;
+}//生成特定区块的数据（纪念：于1.3.1版本修改为ID存储）
+void RebuildChunk(string chunkcode,int ID){
+    int start_rebuild = ID * 16;
+    string chunkcode_depress;
+    for(int i = 0;i<= chunkcode.length() - 1;i++){
+        if(BlockCharID(chunkcode[i]) != -1){//方块
+            i++;
+            char now_block_char = chunkcode[i];
+            int num_block = 0;
+            while(chunkcode[i] >= '0' && chunkcode[i] <= '9'){
+                num_block *= 10;
+                num_block += (chunkcode[i] - '0');
+                i++;
+            }
+            for(int j = 0;j<= num_block - 1;j++)
+                chunkcode_depress += now_block_char;
+        }
+    }
+    for(int i = 112;i<= 144;i++){
+        for(int j = 0;j<= 15;j++){
+            int now_codeID = i * 16 + j;
+            cout << chunkcode_depress[now_codeID] << " ";
+            //map_terrain[i][start_rebuild + j] = chunkcode_depress[now_codeID];
+        }
+        cout << endl;
+    }
+}//根据区块码重建区块
+//纪念消失的ConnectBlock函数，有一日等仙人掌加入，我们再会（泪目）
+void CreateWorld(int world_density,double density_of_tree,double density_of_surprise){
+    int sea_level = 64,spawn_blockID[] = {0,1,2,3,6,7,12};
+    for(int i = 0;i<= WorldXSize;i++){
+        for(int j = 0;j<= WorldYSize;j++){
+            if((i == 0 || i == WorldXSize) || (j == 0 || j == WorldYSize))
+                map_terrain[i][j] = BlockID("barrier");
+            else
+                map_terrain[i][j] = BlockID("air");
+        }
+    }//空世界
+    UpdateBoarder(WorldXSize,WorldYSize);
+}//参数：density_of_hill,density_of_tree每个区块内生成山丘,树和彩蛋的密度，但不是平均分布
+void Eat(){
+    player_hunger+= 5;
+    if(player_hunger > 20){
+        player_full = player_hunger- 20;
+        player_hunger = 20;
+    }
+}//过渡命令/eat，用于增加饥饿值
+void Command(string comm){
+	int distance_comm,desx,desy,comm_place1_x,comm_place1_y,comm_place2_x,comm_place2_y,comm_give_type,comm_give_total_num,comm_give_tool_type,comm_give_damage,comm_give_speed;//各个命令所需的参数
+	char direction_comm;//同上
+	string block_type_comm,comm_fill,comm_transport,name_gamemode,comm_place1,comm_place2,comm_active_screen,mod_comm,clone_comm,color_ctrl,gamerule_comm;//同上
+	if(comm == "/move" || ((comm == "w" || comm == "a" || comm == "s" || comm == "d") && !standardized_command)){
+	    if(comm == "/move")
+		    cin >> direction_comm;
+	    else
+	        direction_comm = comm[0];
+	    direction_comm = Lower_Char(direction_comm); 
+	    PlayerMove(direction_comm);
+	    UpdateChunk();
+    }//移动指令
+	else if(comm == "/set"){
+	   	cin >> direction_comm >> distance_comm >> block_type_comm;
+	   	direction_comm = Lower_Char(direction_comm);
+	   	SetBlock(direction_comm,distance_comm,block_type_comm);
+	}//放置方块指令
+	else if(comm == "/break"){
+	    cin >> direction_comm >> distance_comm;
+	  	BreakBlock(direction_comm,distance_comm);
+	}//破坏方块指令
+	else if(comm == "/gamemode"){
+	    cin >> name_gamemode;
+	    if(GamemodeID(name_gamemode) != -1)
+	        gamemode = gamemode_name[GamemodeID(name_gamemode)];
+	    else if(name_gamemode.length() == 1)
+	        gamemode = gamemode_name[strtoi(name_gamemode)];
+        else
+	        warningtext = language_warncommand[lang] + name_gamemode;//无符合模式，则显示警告
+	}//gamemode指令
+	else if(comm == "/help")
+        HelpPrint();//help指令
+    else if(comm == "/open"){
+    	cin >> comm_active_screen;
+    	active_screen = comm_active_screen;
+    }//open指令
+    else if(comm == "/testblock"){
+        cin >> direction_comm >> distance_comm;
+        TestBlock(direction_comm,distance_comm);
+    }//testblock指令
+    else if(comm == "/eat"){
+        Eat();
+    }//沙雕的命令......吃也是个指令
+    else if(comm == "/kill"){
+        PlayerBorn(respawnx,respawny);
+        info_text.push(playername + language_kill[lang]);
+    }
+	else if(gamemode == "creative"){
+	    if(comm == "/tp"){
+    	    getline(cin,comm_transport);
+    	    Transportation(comm_transport);
+    	    UpdateChunk();
+    	}//tp指令处理
+    	else if(comm == "/fill"){
+            getline(cin,comm_fill);
+            Fill(comm_fill);
+    	}//fill指令处理
+    	else if (comm == "/clone"){
+        	getline(cin,clone_comm);
+    	    Clone(clone_comm);
+    	}//clone指令处理
+    	else if(comm == "/gamerule"){
+    	    getline(cin,gamerule_comm);//第四个使用词句分析的命令
+    	    Gamerule(gamerule_comm);
+    	}//gamerule指令处理
+    	/*else if(ModCommandID(comm) != -1){
+    	    cin >> mod_comm;
+    	    string ModAct = CommandRelatedMod(ModCommandID(comm));//真正执行的模组
+	        if(ModAct == mod_list[0]){}
+	        else if(ModAct == mod_list[1]){}
+	        else{}
+	        //真羡慕Python的eval函数（能把字符串转成执行代码）.....就不用一个一个模组去对应了
+    	}*/
+    	else
+		    warningtext = language_warncommand[lang + 3] + comm;//未知命令警告
+	}
+	else
+	    warningtext = language_warncommand[lang + 3] + comm;//未知命令警告
+	if(warningtext != "\0")
+	    info_text.push(warningtext);
+}//用于命令的处理
+void Addmod(string mod_name,string mod_command,string mod_block_add,string mod_item_add){
+    mod_list[mod_total++] = mod_name;//单个的名字
+    if(Capital_or_Lower_String(mod_command) != "none"){
+        for(int i = 0;i <= mod_command.length() - 1;i++){
+            if(mod_command[i] == '<')/*碰到命令标识符*/{
+                i++;
+                while(mod_command[i] != '>')//在碰到右标识符前持续读入命令数据
+                    mod_command_list[mod_command_total] += mod_command[i++];
+                mod_command_list[mod_command_total] += ("." + mod_name);
+                mod_command_total++;
+            }
+        }//解析模组新增命令并写入
+    }
+    if(Capital_or_Lower_String(mod_block_add) != "none"){
+        for(int i = 0;i <= mod_block_add.length() - 1;i++){
+            if(mod_block_add[i] == '<')/*碰到方块标识符*/{
+                i++;
+                while(mod_block_add[i] != ',')//在碰到逗号前持续读入方块名称
+                    mod_block_name[mod_block_total] += mod_block_add[i++];
+                mod_block_name[mod_block_total] += ("." + mod_name);//添加模组标识
+                mod_block_char[mod_block_total++] = mod_block_add[i+ 1];
+            }
+        }//解析模组新增方块并写入
+    }
+    if(Capital_or_Lower_String(mod_item_add) != "none"){
+        for(int i = 0;i <= mod_item_add.length() - 1;i++){
+                if(mod_item_add[i] == '<')/*碰到物品标识符*/{
+                i++;
+                while(mod_item_add[i] != ',')//在碰到逗号前持续读入物品名称
+                    mod_item_name[mod_item_total] += mod_item_add[i++];
+                    mod_item_name[mod_item_total] += ("." + mod_name);
+                    mod_item_char[mod_item_total++] = mod_item_add[i+ 1];
+            }
+        }//解析模组新增物品并写入
+    }
+}//1.2.3更新--模组的初步兼容！！！
+void WorldInitilize(bool skip){//世界初始化
+    clear
+    AddTag(0,"barrier,bedrock");//unbreakable标签，用于判断是否能破坏
+    AddTag(1,"furnace,crafting_table");//interaction标签，用于判断是否能交互
+    AddTag(2,"grass,dirt");//plant标签，用于判断是否能生长植物
+    AddTag(3,"stone,cobblestone");//ore_replaceable标签，用于判断是否生成矿物
+    AddTag(4,"air,wood,leave,water,lava");//through标签，用于判断玩家是否能通过方块
+    AddTag(5,"sand,leave");//gravity标签，用于判断方块是否受重力影响
+    AddTag(6,"water,lava");//oxygen标签，用于判断是否要消耗氧气
+    AddTag(7,"water,lava");//fluid标签，用于判断是否为流体
+    //目前能想到的最简单的定义方式......一键定义+可视化,但得加BlockID函数
+    UpdateBlockInfo();
+    if(!skip){
+        cout << language_initilize[lang];
+        cin.ignore(1);
+        getline(cin,worldname);
+        cout << language_initilize[lang +3];
+        getline(cin,playername);
+        clear
+        cout << language_initilize[lang + 6] << playername << endl;
+        sleep(1);
+        ITP(language_initilize[lang +9]);
+        sleep(1);
+        clear
+    }
+    srand(time(0));
+    CreateWorld(0,0,0);
+    PlayerBorn(WorldXSize / 2,WorldYSize / 2 - 2);
+    active_screen = "main";
+}
+bool CheckSurvive(){
+    if(player_heart > 0)
+        return 1;
+    else
+        return 0;
+}//检测玩家是否存活
+void UpdatePlayer(){
+    if(gamemode != "creative"){
+        if(TestTag(tag_type[6],Block_List[map_terrain[playery][playerx]].tag))
+            info_text.push(language_player[lang] + itos(player_oxygen));
+            player_oxygen--;
+        //氧气消耗
+        if(player_full > 0)
+            player_full -= 0.5;//优先消耗饱食度
+        else
+            player_hunger -= 0.5;//自然消耗饥饿值
+        if(player_hunger <= 0){
+            player_hunger = 0;
+            player_heart--;
+            if(!CheckSurvive()){
+                PlayerBorn(respawnx,respawny);
+                info_text.push(playername + language_kill[lang + 3]);
+            }//检测是否被饿死
+        }//饥饿值降到零时开始减少生命
+        if(player_oxygen <= 0){
+            player_oxygen = 0;
+            player_heart -= 2;
+            if(!CheckSurvive()){
+                PlayerBorn(respawnx,respawny);
+                info_text.push(playername + language_kill[lang + 6]);
+            }//检测是否被饿死
+        }//氧气值降到零时开始以每回合2点减少生命
+        
+    }
+}
+//主函数
+int main(){
+    bool skip_title = 0;
+    item item_list[128];
+    gamemode = "creative";
+    Addmod("TestMod","</testmod></test>","<block1,^>","none");//测试模组
+    cout << "语言：中文/中文繁體/English(输入语言名称):";
+    cin >> language;
+    if(language == "English")
+        lang = 2;
+    else if(language == "中文")
+        lang = 0;
+    else if(language == "中文繁體")
+        lang = 1;
+    else
+        lang = 0;//默认为0
+    clear
+    cout << language_TitleScreen[lang + 15];
+    cin >> skip_title;
+    if(!skip_title){
+        for(int i = 0;i<= 6;i++){
+            for(int j = 0;j<= 30;j++){
+                cout << "\033[41m" << TitleScreen[i][j];
+                if(j != 30)
+                    cout << " ";
+            }
+            cout << endl;
+        }
+        cout << "\033[m";
+        cout << language_TitleScreen[lang] << endl;
+        cout << "\033[41m" << language_celebrate[lang] << "\033[m" << endl;
+        cout << language_TitleScreen[lang + 3] << "2021/1/28 16:30:00"<< endl;
+        cout << language_TitleScreen[lang + 6] << GameLatestVersion << endl;
+        cout << language_TitleScreen[lang + 9] << endl;
+        cout << language_TitleScreen[lang + 12] << endl;
+        cin >> skip;
+        char choose_skip = '1';
+        if(!skip){
+            clear
+            sleep(2);
+            ITP("“同学们听好了，今天是我们的第一节地理课，我们来认识这个世界”");
+            ITP(("“这个世界大小为" + itos(WorldXSize * WorldYSize) + "平方米，在这之外是不可逾越的屏障以及六米宽的虚空，任何物体，除了自然山脉，任何物体都不会进入这个领域”"));
+            ITP(("在我们这个世界资源极其有限，同时灾难频发，正因如此，之前陨落的文明根据边境上的记录，已经多达21902个，我们，编号Su-21903的文明,是唯一一个存活超过第一个“大灾难”的"));
+            ITP("“大灾难？”有个同学问到。");
+            ITP("“那是段黑暗的历史，这个世界由于边界的阻挡，任何试图搬离大灾难影响范围的举动都不会实现，这个灾难包含了异常气候导致的大洪水，大规模地形移动以及最致命的......”老师倒吸一口冷气。");
+            ITP("“火山，释放的有毒气体会迅速填充整个世界，而我们的祖先，正巧在洪水中踏上了一块高地，在地震中寻找到了庇护所，在火山气体中找到了一些未被摧毁的新鲜树叶，然后就有了这个灿烂的文明”");
+            ITP("“老师！这么可怕的大灾难，还会有第二次吗？”");
+            ITP("“会有，但时间可能要到很久以后了，这个世界的资源被我们尽可能利用，急速发展科技，最终寻找到了利用热能制造物质，利用模拟超新星的对撞机生产重元素，再然后，就是以最小的空间，造最精密的机器，当然这个世界没有日夜，每个人也没有居所，留下这么广阔的土地，除去对撞机横跨整个世界的宽度，我们还有大量的空间，火山被完全消除，已经没有什么能威胁我们了”老师欣喜地说。");
+            ITP("“我们很快发现了灾难的规律，在小灾难中便能提前预报，并搬运机器。灾难检测局每时每刻都在监视着世界内的256个监测点，一旦任何点位的绝对坐标发生大于0.001米的移动，灾难就会在10至20天内于点位方圆n格内到来，这个n值，又被称为灾域，由公式<绝对坐标移动> * <灾难常数 = 88.69311>得来，第一个知识点，快记！”");
+            ITP("边境上的背诵声不绝于耳，因为有限的空间，在边境上无法建造大型机器，这里也成了政府唯一允许自由摆放方块的地方，前人们用大量的资源，强制在边境外放置了高压缩的2进制文字，供后人学习。");
+            ITP("我背着笔记，又回望这个世界，有限的世界，无尽的科技，远处的终极对撞机传来轰轰的响声，南北方向的大输送带向各地输送大量材料，x = " + itos(WorldXSize / 2) + "的地方，是世界的中心轴，再往中央，x = " + itos(WorldXSize / 2) +", y = " + itos(WorldYSize / 2) + ",是这个世界的中心，无数的物质在这极高密度的聚变室里被制造，随着1格宽的的超级输送带，为世界增添更多的科技。");
+            sleep(1);
+            ITP("“DisaSite报告！位于世界中心聚变舱内的监测点相对于世界绝对零点“终端之角”，移动了1.8869311米！！！”");
+            ITP("“DisaSite报告！位于世界之角的四个监测点失去信号！”");
+            ITP("DisaSite报告！经过灾难最高委以及全世界专家审议，确认了灾难将于12天后到来！");
+            ITP("DisaSite报告！对结果的分析显示灾难不是普通灾难！世界的方块基础在逐渐向中心以193秒为间隔随机消失！是虚空侵入！");
+            ITP("我望向了终端之角，此刻，世界边缘的机器正缓慢消失，一个小时后，撤离到100,100角的班级，甚至能看见边界上发出微微亮光的终端之角，那根128米高的巨型光源柱，整个世界的零点，此刻漂浮在不断扩大的虚空中。");
+            ITP("老师无助的解释：“虚空侵入”这个灾难在历史上一共就只有过一次，那是大灾难后的第32个灾难，导致了Su-21902文明的覆灭，也就是......我们之前的文明");
+            ITP("“这个灾难的强度，即灾域，是整个世界。所有的方块随着时间推移，从边界开始，逐渐消失，根据上一个文明的记录，在灾难结束后，整个世界只会剩下一个方块，位置随机，目前根据灾难局的监测，现在的世界虚空内，没有任何方块......”");
+            ITP("边境还在不断的扩大，聚集的人们越来越多，也有人来不及撤离，掉入了虚空......庞大的对撞机因为冗余单元全部受损，停了下来，传送带停了，唯一的无限方块基础也没了。");
+            ITP("人越来越少，在剩下不到10个人后，一大块地面塌陷，就只有我自己了......");
+            ITP("最终，在世界只剩下16个方块时，我跳进了仍有余温的聚变舱，在x=256,y=256时，灾难结束，我成了最后一个人。");
+            ITP("我看到了灾难后的景象，熟悉的地形开始重新出现，世界又恢复了原样，但没有了人，没了我们的辉煌科技，剩下的就是我一个人，孤零零的站在世界中心，聚变舱内核。");
+            ITP("悲痛之中，我有了信念：");
+            ITP("在这个世界生存下去！重建我们的——");
+            ITP("辉煌文明！");
+            sleep(1);
+            cout << "开始游戏(按任意键继续) -->";
+            cin >> choose_skip;
+        }
+    }
+    worldname = "World SU-21903";
+    playername = "Player-2021";
+    WorldInitilize(skip_title);
+    UpdateChunk();
+    SpawnTree(2,130,127,0);
+    string command;
+    /*
+    Transportation("126 125");
+    SetBlock('a',5,"grass");
+    SetBlock('a',4,"grass");
+    SetBlock('a',3,"grass");
+    SetBlock('a',2,"grass");
+    SetBlock('a',1,"grass");
+    SetBlock('a',0,"grass");
+    SetBlock('d',1,"grass");
+    SetBlock('d',2,"grass");
+    Gamerule("color 1");
+    Gamerule("vision_size 5");
+    */
+    UpdateScreen();
+    BriefInformationPrint();
+    int now_chunk_ID = playerx / 16 + 1;
+    while(1){
+        game_time++;//游戏时间
+        UpdateBoarder(boarder_x,boarder_y);//更新边境
+        UpdatePlayer();//更新玩家信息
+        string now_chunk = CreateChunkCode(now_chunk_ID);
+        now_chunk_ID = playerx / 16;
+        srand(time(0));
+        cin >> command;
+        command = Capital_or_Lower_String(command);
+        Command(command);
+        clear
+        if(active_screen == "main"){
+            UpdateScreen();
+            //cout << now_chunk << endl;
+            //RebuildChunk(now_chunk,now_chunk_ID);
+            BriefInformationPrint();
+        }
+        else if(active_screen == "backpack")//背包
+            UpdateBackpack();
+        else if(active_screen == "info")//调试信息
+            UniversalInformationPrint();
+        else{
+            active_screen = "main";
+            UpdateScreen();
+            BriefInformationPrint();
+        }//其他界面
+        UpdateChunk();
+    }
+    return 0;
+}
+/*
+给开发者：
+1.简略
+Survive作为开放式沙盒游戏，支持玩家自行编写模组，数据包等非官方内容
+2.指引：
+(1)函数命名规则
+函数缩写为函数名中每个单词的首字母,如果有重名，则在最后一个字母上补全单词
+示例：SpawnSurfaceBlock -->SSBlock, GiveItem --> GI
+(2)函数快速查找
+函数分为三大类：系统处理函数，信息处理函数及游戏玩法，内容执行函数
+系统处理-->333至464行,共131行
+信息处理-->466至639行,共173行
+游戏玩法内容-->641至1370行,共729行
+(3)语言资源
+目前Survive的英语翻译均为机翻（一个人手翻工作量太大），若有语法错误请在评论区或私信联系，资源包位于273-334行
+3.内容：
+(1)一些常用方块的ID：
+5号方块：air 显示字符：[ ] 中文名：空气 - 在破坏方块后用于替换空位的方块
+14号方块：unknown block 显示字符：[?] 中文名：未知方块 - 在游戏无法解析时出现的方块
+4号方块：barrier 显示字符：[/] 中文名：屏障 - 阻挡玩家进入虚空的方块
+0号方块：stone 显示字符：[O] 中文名：石头 - 构建世界的基础
+1号方块：cobblestone 显示字符：[@] 中文名：圆石 - 石头的变种，不会自然生成，但是游戏的第一个方块（与石头一起）
+(2)一些常用的函数：
+#BlockID-参数：string,作用：查询方块ID，以标准名为参数，不存在返回14（default方块ID），否则返回该方块在游戏内的ID
+注：参数大小写敏感
+
+#BlockCharID-参数：char,作用：查询方块ID，以显示字符为参数，会返回第一个使用此字符的方块，在加入方块类后会取消使用
+注：可能会有多个可能解，不建议在新版本（1.4.0以上）使用
+
+#OutsideWorld-参数：int,int,作用：判断坐标是否超出世界范围，两个参数分别为x坐标和y坐标
+注：在无限地图后，可能会重写比对x轴最大值的逻辑（取决于能正常加载的区块数量），当然在x = 0,y轴上的判断不变
+
+#strtoi & itos - 老牌函数，string型数字与int型互相转换，参数：string(strtoi)/int(itos)
+itos函数目前支持long long,两个函数均支持负数
+
+(3)游戏机制
+#目前的地形是超平坦，海平面维持在64(y = 192)格，生成方块为树叶，树干，草方块，石头，基岩，屏障
+#游戏处于x轴，y轴正半轴，但y轴往下延伸
+#玩家能打开backpack,info,main界面，backpack目前仍未启用，但其余两个可以正常运行你
+#wasd是唯一标示方向的字符
+#目前仅有Fill,Transportation,Clone三个命令支持通配符，其余都需要多个参数
+#游戏的单词分隔系统是统一的，可以从上面三个函数中复制，具体运作见专门作品
+#命令组需要让所有的命令使用分词系统，这是个大工程，但目前命令可以通过一次性复制达到多次操作的效果，虽然在学而思上仍会超长
+#树有圣诞树和普通树两种
+#根据 尹怀杰 的提议，当玩家直接进入游戏时，世界名默认为“World SU-21903”,玩家名默认为“Player-2021”
+*/
